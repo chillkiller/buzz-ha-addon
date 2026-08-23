@@ -1,26 +1,41 @@
 # ─────────────────────────────────────────────────────────────────────
 # Buzz Relay HA Add-on — Dockerfile
 # Multi-service container: Postgres + Redis + MinIO + buzz-relay + buzz-cli + buzz-acp
-# Built for aarch64 (Raspberry Pi HAOS) and amd64
+# Built entirely from source (official ghcr.io image is private)
 # ─────────────────────────────────────────────────────────────────────
 
 ARG RUST_VERSION=1.95
+ARG NODE_VERSION=24
 ARG DEBIAN_VERSION=bookworm
 
-# ── Stage 1: Build buzz-cli and buzz-acp from source ─────────────────
-FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS cli-builder
+# ── Stage 1: Build all Rust binaries from source ─────────────────────
+FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS rust-builder
 WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config libssl-dev ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
-# Shallow clone and build
 RUN git clone --depth 1 https://github.com/block/buzz.git /build/buzz
 WORKDIR /build/buzz
-RUN cargo build --release --locked -p buzz-cli -p buzz-acp -p buzz-admin
+RUN cargo build --release --locked \
+    -p buzz-relay --bin buzz-relay \
+    -p buzz-cli --bin buzz \
+    -p buzz-acp --bin buzz-acp \
+    -p buzz-admin --bin buzz-admin \
+    -p buzz-pair-relay --bin buzz-pair-relay
 
-# ── Stage 2: Extract buzz-relay + web UI from official image ─────────
-FROM ghcr.io/block/buzz:main AS buzz-extract
+# ── Stage 2: Build web UI from source ────────────────────────────────
+FROM node:${NODE_VERSION}-${DEBIAN_VERSION}-slim AS web-builder
+WORKDIR /build
+RUN corepack enable
+COPY --from=rust-builder /build/buzz/package.json /build/buzz/pnpm-lock.yaml /build/buzz/pnpm-workspace.yaml ./
+COPY --from=rust-builder /build/buzz/patches/ patches/
+COPY --from=rust-builder /build/buzz/web/package.json web/
+COPY --from=rust-builder /build/buzz/admin-web/package.json admin-web/
+RUN pnpm install --frozen-lockfile --filter buzz-web --filter buzz-admin-web
+COPY --from=rust-builder /build/buzz/web/ web/
+COPY --from=rust-builder /build/buzz/admin-web/ admin-web/
+RUN pnpm -C web build && pnpm -C admin-web build
 
 # ── Stage 3: Runtime ─────────────────────────────────────────────────
 FROM debian:${DEBIAN_VERSION}-slim
@@ -31,7 +46,6 @@ ENV LC_ALL=C.UTF-8
 ENV PATH="/usr/lib/postgresql/15/bin:${PATH}"
 
 # Install runtime dependencies
-# Postgres 15 ships with bookworm, no need for extra repos
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -43,18 +57,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nginx \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy buzz-relay + buzz-pair-relay from the official image (pre-built for arm64)
-COPY --from=buzz-extract /usr/local/bin/buzz-relay      /usr/local/bin/buzz-relay
-COPY --from=buzz-extract /usr/local/bin/buzz-pair-relay /usr/local/bin/buzz-pair-relay
+# Copy all binaries from our build stage
+COPY --from=rust-builder /build/buzz/target/release/buzz-relay      /usr/local/bin/buzz-relay
+COPY --from=rust-builder /build/buzz/target/release/buzz            /usr/local/bin/buzz
+COPY --from=rust-builder /build/buzz/target/release/buzz-acp        /usr/local/bin/buzz-acp
+COPY --from=rust-builder /build/buzz/target/release/buzz-admin      /usr/local/bin/buzz-admin
+COPY --from=rust-builder /build/buzz/target/release/buzz-pair-relay /usr/local/bin/buzz-pair-relay
 
-# Copy buzz-cli, buzz-acp, buzz-admin from our build stage
-COPY --from=cli-builder /build/buzz/target/release/buzz       /usr/local/bin/buzz
-COPY --from=cli-builder /build/buzz/target/release/buzz-acp   /usr/local/bin/buzz-acp
-COPY --from=cli-builder /build/buzz/target/release/buzz-admin /usr/local/bin/buzz-admin
-
-# Copy the Buzz Web-UI and Admin Web-UI from official image
-COPY --from=buzz-extract /srv/buzz/web        /srv/buzz/web
-COPY --from=buzz-extract /srv/buzz/admin-web  /srv/buzz/admin-web
+# Copy the Buzz Web-UI and Admin Web-UI from our build stage
+COPY --from=web-builder /build/web/dist        /srv/buzz/web
+COPY --from=web-builder /build/admin-web/dist  /srv/buzz/admin-web
 
 ENV BUZZ_WEB_DIR=/srv/buzz/web
 ENV BUZZ_ADMIN_WEB_DIR=/srv/buzz/admin-web
