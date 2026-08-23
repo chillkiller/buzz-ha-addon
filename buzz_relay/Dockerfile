@@ -28,6 +28,7 @@ FROM debian:${DEBIAN_VERSION}-slim
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
+ENV PATH="/usr/lib/postgresql/15/bin:${PATH}"
 
 # Install runtime dependencies
 # Postgres 15 ships with bookworm, no need for extra repos
