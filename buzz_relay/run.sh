@@ -114,6 +114,7 @@ PGCONF
 # ── Start Redis ──────────────────────────────────────────────────────
 start_redis() {
     echo "[buzz] Starting Redis..."
+    mkdir -p /data/redis
     redis-server \
         --port 6379 \
         --bind 127.0.0.1 \
@@ -131,6 +132,7 @@ start_redis() {
 # ── Start MinIO ──────────────────────────────────────────────────────
 start_minio() {
     echo "[buzz] Starting MinIO..."
+    mkdir -p /data/minio
     export MINIO_ROOT_USER="$S3_ACCESS_KEY"
     export MINIO_ROOT_PASSWORD="$S3_SECRET_KEY"
 
