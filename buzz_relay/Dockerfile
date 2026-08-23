@@ -40,6 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-15 \
     redis-server \
     jq \
+    nginx \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy buzz-relay + buzz-pair-relay from the official image (pre-built for arm64)

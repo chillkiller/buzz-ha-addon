@@ -162,7 +162,7 @@ start_relay() {
     export BUZZ_S3_SECRET_KEY="$S3_SECRET_KEY"
     export BUZZ_S3_BUCKET="buzz-media"
     export BUZZ_GIT_REPO_PATH="/data/git"
-    export BUZZ_BIND_ADDR="0.0.0.0:3000"
+    export BUZZ_BIND_ADDR="127.0.0.1:3001"
     export BUZZ_HEALTH_PORT="8080"
     export BUZZ_AUTO_MIGRATE="$AUTO_MIGRATE"
     export RUST_LOG="${RUST_LOG:-buzz_relay=info}"
@@ -177,15 +177,9 @@ start_relay() {
     export BUZZ_CORS_ORIGINS=""
 
     # RELAY_URL determines which host the relay seeds a community for.
-    # HA Ingress sends Host: <supervisor-ip>:3000, so we need the relay
-    # to seed a community for that host. Use the container's own IP on the
-    # HA internal network, falling back to localhost.
-    HA_HOST=$(hostname -I 2>/dev/null | awk '{print $1}')
-    if [ -n "$HA_HOST" ]; then
-        export RELAY_URL="http://${HA_HOST}:3000"
-    else
-        export RELAY_URL="http://localhost:3000"
-    fi
+    # The relay runs on 127.0.0.1:3001 behind nginx which always sends
+    # Host: localhost:3001, so the community always matches.
+    export RELAY_URL="http://localhost:3001"
     echo "[buzz] RELAY_URL=${RELAY_URL} (community host)"
 
     # Wait for Postgres
@@ -201,21 +195,57 @@ start_relay() {
         buzz-admin migrate 2>&1 || echo "[buzz] Migration via buzz-admin failed, relay will auto-migrate"
     fi
 
-    # Seed communities for all possible HA Ingress host headers.
-    # The relay only seeds a community for RELAY_URL's host, but HA Ingress
-    # may send a different Host header. Insert communities for common hosts
-    # directly into the DB so the relay accepts Ingress requests.
-    echo "[buzz] Seeding communities for HA Ingress hosts..."
-    HA_HOST=$(hostname -I 2>/dev/null | awk '{print $1}')
-    for COMMUNITY_HOST in "localhost:3000" "127.0.0.1:3000" "0.0.0.0:3000" "${HA_HOST}:3000" "${HA_HOST}"; do
-        [ -z "$COMMUNITY_HOST" ] && continue
-        psql -h 127.0.0.1 -U buzz -d buzz -c \
-            "INSERT INTO communities (host, created_at) VALUES ('$COMMUNITY_HOST', NOW()) ON CONFLICT (lower(host)) DO NOTHING;" 2>/dev/null && \
-            echo "[buzz] Seeded community for host: $COMMUNITY_HOST" || true
-    done
+    # Start nginx reverse proxy on :3000 (HA Ingress port)
+    # It rewrites the Host header to localhost:3001 so the relay's
+    # community (seeded from RELAY_URL=http://localhost:3001) always matches,
+    # regardless of what Host HA Ingress forwards.
+    echo "[buzz] Starting nginx proxy on :3000 → relay on :3001..."
+    cat > /etc/nginx/nginx.conf << 'NGINXCONF'
+worker_processes 1;
+pid /var/run/nginx.pid;
+error_log stderr warn;
 
-    # Start relay (foreground — this is the main process)
-    echo "[buzz] Buzz Relay starting on :3000"
+events {
+    worker_connections 256;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    sendfile on;
+    keepalive_timeout 65;
+    client_max_body_size 0;
+
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        '' close;
+    }
+
+    server {
+        listen 3000;
+        server_name _;
+
+        location / {
+            proxy_pass http://127.0.0.1:3001;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Host localhost:3001;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_buffering off;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+        }
+    }
+}
+NGINXCONF
+    nginx
+
+    # Start relay on :3001 (behind nginx)
+    echo "[buzz] Buzz Relay starting on :3001 (behind nginx :3000)"
     exec buzz-relay
 }
 
