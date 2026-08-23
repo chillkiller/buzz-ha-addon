@@ -174,7 +174,7 @@ start_relay() {
     export BUZZ_REQUIRE_RELAY_MEMBERSHIP="$REQUIRE_RELAY_MEMBERSHIP"
     export BUZZ_ALLOW_NIP_OA_AUTH="$ALLOW_NIP_OA_AUTH"
     export BUZZ_GIT_CONFORMANCE_PROBE="true"
-    export BUZZ_CORS_ORIGINS="*"
+    export BUZZ_CORS_ORIGINS=""
 
     # Wait for Postgres
     echo "[buzz] Waiting for Postgres..."
