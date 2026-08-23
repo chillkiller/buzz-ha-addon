@@ -176,6 +176,18 @@ start_relay() {
     export BUZZ_GIT_CONFORMANCE_PROBE="true"
     export BUZZ_CORS_ORIGINS=""
 
+    # RELAY_URL determines which host the relay seeds a community for.
+    # HA Ingress sends Host: <supervisor-ip>:3000, so we need the relay
+    # to seed a community for that host. Use the container's own IP on the
+    # HA internal network, falling back to localhost.
+    HA_HOST=$(hostname -I 2>/dev/null | awk '{print $1}')
+    if [ -n "$HA_HOST" ]; then
+        export RELAY_URL="http://${HA_HOST}:3000"
+    else
+        export RELAY_URL="http://localhost:3000"
+    fi
+    echo "[buzz] RELAY_URL=${RELAY_URL} (community host)"
+
     # Wait for Postgres
     echo "[buzz] Waiting for Postgres..."
     for i in $(seq 1 30); do
