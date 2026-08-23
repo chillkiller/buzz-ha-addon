@@ -61,10 +61,6 @@ generate_keys() {
         jq --arg rk "$RELAY_PRIVATE_KEY" '.relay_private_key = $rk' "$OPTIONS_FILE" > "$tmp" && mv "$tmp" "$OPTIONS_FILE"
         echo "[buzz] Relay private key generated and saved."
     fi
-
-    if [ -z "$RELAY_OWNER_PUBKEY" ]; then
-        echo "[buzz] No owner pubkey set — relay will run in open mode."
-    fi
 }
 
 # ── Start Postgres ───────────────────────────────────────────────────
@@ -72,11 +68,19 @@ start_postgres() {
     echo "[buzz] Starting Postgres..."
     export PGDATA=/data/postgres
 
+    # Create postgres user if it doesn't exist (initdb refuses to run as root)
+    if ! id postgres &>/dev/null; then
+        useradd -r -m -d /var/lib/postgresql -s /bin/bash postgres
+    fi
+
+    # Ensure ownership
+    mkdir -p "$PGDATA"
+    chown -R postgres:postgres "$PGDATA"
+
     # Initialize if needed
     if [ ! -d "$PGDATA/pg_wal" ]; then
-        mkdir -p "$PGDATA"
         echo "[buzz] Initializing Postgres database..."
-        initdb -D "$PGDATA" -U buzz --auth-local=trust --auth-host=trust --username=postgres
+        su postgres -c "initdb -D $PGDATA -U buzz --auth-local=trust --auth-host=trust"
     fi
 
     # Configure
@@ -93,14 +97,16 @@ min_wal_size = 64MB
 checkpoint_completion_target = 0.5
 wal_buffers = 4MB
 PGCONF
+    chown postgres:postgres "$PGDATA/postgresql.conf"
 
-    # Start as root (postgres allows this with --allow-group)
-    pg_ctl -D "$PGDATA" -l /data/postgres.log start -o "-c config_file=$PGDATA/postgresql.conf"
+    # Start as postgres user
+    su postgres -c "pg_ctl -D $PGDATA -l /data/postgres.log start -o '-c config_file=$PGDATA/postgresql.conf'"
     sleep 2
 
     # Create database and user
-    psql -h 127.0.0.1 -U postgres -c "CREATE USER buzz WITH PASSWORD '$POSTGRES_PASSWORD' SUPERUSER;" 2>/dev/null || true
-    psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE buzz OWNER buzz;" 2>/dev/null || true
+    psql -h 127.0.0.1 -U buzz -d postgres -c "ALTER USER buzz WITH PASSWORD '$POSTGRES_PASSWORD' SUPERUSER;" 2>/dev/null || \
+        psql -h 127.0.0.1 -U buzz -d postgres -c "CREATE USER buzz WITH PASSWORD '$POSTGRES_PASSWORD' SUPERUSER;" 2>/dev/null || true
+    psql -h 127.0.0.1 -U buzz -d postgres -c "CREATE DATABASE buzz OWNER buzz;" 2>/dev/null || true
     echo "[buzz] Postgres ready"
 }
 
