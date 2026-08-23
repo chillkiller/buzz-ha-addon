@@ -201,6 +201,19 @@ start_relay() {
         buzz-admin migrate 2>&1 || echo "[buzz] Migration via buzz-admin failed, relay will auto-migrate"
     fi
 
+    # Seed communities for all possible HA Ingress host headers.
+    # The relay only seeds a community for RELAY_URL's host, but HA Ingress
+    # may send a different Host header. Insert communities for common hosts
+    # directly into the DB so the relay accepts Ingress requests.
+    echo "[buzz] Seeding communities for HA Ingress hosts..."
+    HA_HOST=$(hostname -I 2>/dev/null | awk '{print $1}')
+    for COMMUNITY_HOST in "localhost:3000" "127.0.0.1:3000" "0.0.0.0:3000" "${HA_HOST}:3000" "${HA_HOST}"; do
+        [ -z "$COMMUNITY_HOST" ] && continue
+        psql -h 127.0.0.1 -U buzz -d buzz -c \
+            "INSERT INTO communities (host, created_at) VALUES ('$COMMUNITY_HOST', NOW()) ON CONFLICT (lower(host)) DO NOTHING;" 2>/dev/null && \
+            echo "[buzz] Seeded community for host: $COMMUNITY_HOST" || true
+    done
+
     # Start relay (foreground — this is the main process)
     echo "[buzz] Buzz Relay starting on :3000"
     exec buzz-relay
