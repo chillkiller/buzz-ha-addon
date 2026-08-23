@@ -1,4 +1,4 @@
-#!/command/with-contenv bash
+#!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────
 # Buzz Relay HA Add-on — Entrypoint
 # Starts: Postgres → Redis → MinIO → buzz-relay (with Web-UI on :3000)
