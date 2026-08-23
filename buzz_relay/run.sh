@@ -74,8 +74,8 @@ start_postgres() {
     fi
 
     # Ensure ownership
-    mkdir -p "$PGDATA"
-    chown -R postgres:postgres "$PGDATA"
+    mkdir -p "$PGDATA" /data/postgres.log
+    chown -R postgres:postgres "$PGDATA" /data/postgres.log
 
     # Initialize if needed
     if [ ! -d "$PGDATA/pg_wal" ]; then
