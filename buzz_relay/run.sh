@@ -12,13 +12,12 @@ if [ ! -f "$OPTIONS_FILE" ]; then
     exit 1
 fi
 
-opt()  { jq -r ".${1} // empty"    "$OPTIONS_FILE"; }
-opt_bool() { jq -r ".${1} // false" "$OPTIONS_FILE"; }
+opt()      { jq -r ".${1} // empty"    "$OPTIONS_FILE"; }
+opt_bool() { jq -r ".${1} // false"    "$OPTIONS_FILE"; }
 opt_or_gen() {
     local val
     val=$(jq -r ".${1} // empty" "$OPTIONS_FILE")
     if [ -z "$val" ] || [ "$val" = "null" ]; then
-        # Generate a random secret
         openssl rand -hex 32
     else
         echo "$val"
@@ -55,14 +54,8 @@ persist_secrets() {
 # ── Generate keys if not provided ───────────────────────────────────
 generate_keys() {
     if [ -z "$RELAY_PRIVATE_KEY" ]; then
-        echo "[buzz] Generating relay keypair..."
-        local keys
-        keys=$(/usr/local/bin/buzz-admin generate-key 2>/dev/null || openssl rand -hex 32)
-        RELAY_PRIVATE_KEY=$(echo "$keys" | jq -r '.secret // .private_key // empty' 2>/dev/null || echo "$keys")
-        if [ -z "$RELAY_PRIVATE_KEY" ] || [ ${#RELAY_PRIVATE_KEY} -lt 32 ]; then
-            RELAY_PRIVATE_KEY=$(openssl rand -hex 32)
-        fi
-        # Persist the key
+        echo "[buzz] Generating relay private key..."
+        RELAY_PRIVATE_KEY=$(openssl rand -hex 32)
         local tmp
         tmp=$(mktemp)
         jq --arg rk "$RELAY_PRIVATE_KEY" '.relay_private_key = $rk' "$OPTIONS_FILE" > "$tmp" && mv "$tmp" "$OPTIONS_FILE"
@@ -71,27 +64,23 @@ generate_keys() {
 
     if [ -z "$RELAY_OWNER_PUBKEY" ]; then
         echo "[buzz] No owner pubkey set — relay will run in open mode."
-        echo "[buzz] Set relay_owner_pubkey in add-on config for closed mode."
     fi
 }
 
 # ── Start Postgres ───────────────────────────────────────────────────
 start_postgres() {
     echo "[buzz] Starting Postgres..."
-    # Use /data for persistence
     export PGDATA=/data/postgres
-    export POSTGRES_PASSWORD
 
     # Initialize if needed
     if [ ! -d "$PGDATA/pg_wal" ]; then
         mkdir -p "$PGDATA"
-        chown -R postgres:postgres "$PGDATA" 2>/dev/null || true
-        su - postgres -c "initdb -D $PGDATA -U buzz --auth-local=trust --auth-host=md5" 2>/dev/null || \
-            initdb -D "$PGDATA" -U buzz --auth-local=trust --auth-host=md5
+        echo "[buzz] Initializing Postgres database..."
+        initdb -D "$PGDATA" -U buzz --auth-local=trust --auth-host=trust --username=postgres
     fi
 
     # Configure
-    cat > "$PGDATA/postgresql.conf" << PGCONF
+    cat > "$PGDATA/postgresql.conf" << 'PGCONF'
 listen_addresses = '127.0.0.1'
 port = 5432
 max_connections = 50
@@ -105,15 +94,14 @@ checkpoint_completion_target = 0.5
 wal_buffers = 4MB
 PGCONF
 
-    # Start
-    su - postgres -c "pg_ctl -D $PGDATA -l /data/postgres.log start -o '-c config_file=$PGDATA/postgresql.conf'" 2>/dev/null || \
-        pg_ctl -D "$PGDATA" -l /data/postgres.log start -o "-c config_file=$PGDATA/postgresql.conf"
+    # Start as root (postgres allows this with --allow-group)
+    pg_ctl -D "$PGDATA" -l /data/postgres.log start -o "-c config_file=$PGDATA/postgresql.conf"
+    sleep 2
 
     # Create database and user
-    sleep 2
     psql -h 127.0.0.1 -U postgres -c "CREATE USER buzz WITH PASSWORD '$POSTGRES_PASSWORD' SUPERUSER;" 2>/dev/null || true
     psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE buzz OWNER buzz;" 2>/dev/null || true
-    psql -h 127.0.0.1 -U buzz -d buzz -c "SELECT 1;" 2>/dev/null && echo "[buzz] Postgres ready" || echo "[buzz] Postgres starting..."
+    echo "[buzz] Postgres ready"
 }
 
 # ── Start Redis ──────────────────────────────────────────────────────
@@ -144,7 +132,7 @@ start_minio() {
         --console-address 127.0.0.1:9001 \
         > /data/minio.log 2>&1 &
 
-    sleep 2
+    sleep 3
 
     # Create bucket
     mc alias set local http://127.0.0.1:9000 "$S3_ACCESS_KEY" "$S3_SECRET_KEY" 2>/dev/null
@@ -180,6 +168,7 @@ start_relay() {
     export BUZZ_CORS_ORIGINS="*"
 
     # Wait for Postgres
+    echo "[buzz] Waiting for Postgres..."
     for i in $(seq 1 30); do
         psql -h 127.0.0.1 -U buzz -d buzz -c "SELECT 1;" 2>/dev/null && break
         sleep 1
@@ -188,34 +177,23 @@ start_relay() {
     # Run migrations if auto-migrate
     if [ "$AUTO_MIGRATE" = "true" ]; then
         echo "[buzz] Running database migrations..."
-        buzz-admin migrate 2>/dev/null || echo "[buzz] Migration via buzz-admin failed, relay will auto-migrate"
+        buzz-admin migrate 2>&1 || echo "[buzz] Migration via buzz-admin failed, relay will auto-migrate"
     fi
 
-    # Start relay (foreground)
+    # Start relay (foreground — this is the main process)
     echo "[buzz] Buzz Relay starting on :3000"
     exec buzz-relay
 }
 
 # ── Main ─────────────────────────────────────────────────────────────
-main() {
-    echo "╔══════════════════════════════════════════╗"
-    echo "║  Buzz Relay HA Add-on v0.1.0              ║"
-    echo "║  Nostr workspace for humans + agents     ║"
-    echo "╚══════════════════════════════════════════╝"
+echo "╔══════════════════════════════════════════╗"
+echo "║  Buzz Relay HA Add-on                      ║"
+echo "║  Nostr workspace for humans + agents      ║"
+echo "╚══════════════════════════════════════════╝"
 
-    # Persist generated secrets
-    persist_secrets
-
-    # Generate Nostr keys if needed
-    generate_keys
-
-    # Start services in order
-    start_postgres
-    start_redis
-    start_minio
-
-    # Start relay (this blocks — it's the main process)
-    start_relay
-}
-
-main "$@"
+persist_secrets
+generate_keys
+start_postgres
+start_redis
+start_minio
+start_relay
