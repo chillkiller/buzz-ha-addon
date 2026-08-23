@@ -1,1 +1,21 @@
-repo_url: https://github.com/chillkiller/buzz-ha-addon
+name: Buzz Relay
+version: "0.1.0"
+slug: buzz_relay
+description: Block's Buzz relay — a Nostr-based workspace where humans and AI agents collaborate in shared channels
+url: https://github.com/chillkiller/buzz-ha-addon
+arch:
+  - aarch64
+  - amd64
+startup: services
+boot: auto
+init: false
+hassio_api: false
+homeassistant_api: false
+host_network: true
+ingress: true
+ingress_port: 3000
+panel_title: Buzz Relay
+panel_icon: mdi:bee
+map:
+  - addon_config:rw
+  - share:rw
