@@ -28,13 +28,9 @@ RUN cargo build --release --locked \
 FROM node:${NODE_VERSION}-${DEBIAN_VERSION}-slim AS web-builder
 WORKDIR /build
 RUN corepack enable
-COPY --from=rust-builder /build/buzz/package.json /build/buzz/pnpm-lock.yaml /build/buzz/pnpm-workspace.yaml ./
-COPY --from=rust-builder /build/buzz/patches/ patches/
-COPY --from=rust-builder /build/buzz/web/package.json web/
-COPY --from=rust-builder /build/buzz/admin-web/package.json admin-web/
+# Copy the entire repo so pnpm workspace resolution works
+COPY --from=rust-builder /build/buzz/ ./
 RUN pnpm install --frozen-lockfile --filter buzz-web --filter buzz-admin-web
-COPY --from=rust-builder /build/buzz/web/ web/
-COPY --from=rust-builder /build/buzz/admin-web/ admin-web/
 RUN pnpm -C web build && pnpm -C admin-web build
 
 # ── Stage 3: Runtime ─────────────────────────────────────────────────
