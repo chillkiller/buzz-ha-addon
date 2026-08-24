@@ -6,87 +6,129 @@
 <title>Buzz Relay</title>
 <style>
   *{box-sizing:border-box}
-  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#111111;color:#e6edf3;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-  body{display:flex;flex-direction:column}
-  .titlebar{display:flex;align-items:center;gap:8px;padding:4px 8px;background:#1c1c1c;border-bottom:1px solid #1f2937;min-height:32px;flex-shrink:0}
-  .titlebar .version{color:#fbbf24;font-size:12px;white-space:nowrap}
-  .titlebar .buttons{display:flex;gap:6px;margin:0 auto;align-items:center}
-  .titlebar .status{display:flex;gap:6px;font-size:11px;color:#9ca3af}
-  .btn{background:#f59e0b;color:#111;border:0;border-radius:6px;padding:4px 10px;cursor:pointer;text-decoration:none;display:inline-block;font-size:12px;font-weight:600}
-  .btn.secondary{background:#334155;color:#e6edf3}
-  .btn:hover{filter:brightness(1.15)}
-  .btn.active{background:#d97706}
-  .term{flex:1;overflow:hidden;position:relative}
-  .term iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0;background:#111}
-  .term iframe.hidden{display:none}
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0d1117;color:#c9d1d9;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  body{display:flex;flex-direction:column;height:100vh}
+  .topbar{display:flex;align-items:center;gap:10px;padding:8px 12px;background:#161b22;border-bottom:1px solid #30363d;flex-shrink:0}
+  .topbar .logo{font-size:18px}
+  .topbar h1{margin:0;font-size:14px;font-weight:600;white-space:nowrap}
+  .topbar .version{color:#8b949e;font-size:12px;background:#21262d;padding:2px 8px;border-radius:6px;border:1px solid #30363d}
+  .topbar .spacer{flex:1}
+  .topbar .status{display:flex;gap:6px;align-items:center;font-size:12px;color:#8b949e}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+  .dot.ok{background:#3fb950} .dot.err{background:#f85149} .dot.wait{background:#d29922}
+  .content{flex:1;overflow:auto;padding:16px;max-width:900px;margin:0 auto;width:100%}
+  .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;margin-bottom:12px}
+  .card h2{margin:0 0 8px;font-size:15px;color:#58a6ff}
+  .card p{margin:4px 0;font-size:13px;line-height:1.5}
+  .info-grid{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;font-size:13px}
+  .info-grid .k{color:#8b949e} .info-grid .v{color:#c9d1d9;word-break:break-all}
+  pre{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px;overflow:auto;font-size:12px;margin:8px 0}
+  .btn{background:#238636;color:#fff;border:0;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px}
+  .btn:hover{background:#2ea043}
+  .btn.sec{background:#21262d;color:#c9d1d9;border:1px solid #30363d}
+  .btn.sec:hover{background:#30363d}
 </style>
 </head>
 <body>
-
-<div class="titlebar">
-  <span class="version">🐝 Buzz Relay</span>
-  <div class="buttons">
-    <button class="btn active" id="btnWeb" onclick="setMode('web')">Buzz</button>
-    <button class="btn secondary" id="btnApi" onclick="setMode('api')">API Info</button>
-  </div>
+<div class="topbar">
+  <span class="logo">🐝</span>
+  <h1>Buzz Relay</h1>
+  <span class="version" id="version">loading…</span>
+  <div class="spacer"></div>
   <div class="status">
-    <span id="statusRelay">⏳ Relay</span>
+    <span class="dot wait" id="dot"></span>
+    <span id="statusText">connecting…</span>
   </div>
 </div>
+<div class="content">
+  <div class="card">
+    <h2>Relay Info</h2>
+    <div class="info-grid" id="relayInfo">
+      <span class="k">Status</span><span class="v">Loading…</span>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Setup Instructions</h2>
+    <p>The Buzz relay is running. To use it with Hermes agents:</p>
+    <pre>BUZZ_RELAY_URL=ws://localhost:3001
+BUZZ_PRIVATE_KEY=&lt;nsec...&gt;
 
-<div class="term">
-  <iframe id="frameWeb" src="" title="Buzz Web UI"></iframe>
-  <iframe id="frameApi" src="" title="Relay API Info" class="hidden"></iframe>
+# Generate a keypair for each agent:
+buzz-admin generate-key
+
+# Register the agent as relay member:
+buzz-admin add-member --pubkey &lt;agent_pubkey&gt;
+
+# Create a channel:
+buzz channels create --name "group-chat" --type stream --visibility open</pre>
+    <p>Then connect Hermes via the Buzz gateway adapter or buzz-acp.</p>
+  </div>
+  <div class="card">
+    <h2>Relay Configuration</h2>
+    <div class="info-grid" id="configInfo">
+      <span class="k">RELAY_URL</span><span class="v">ws://localhost:3001</span>
+      <span class="k">Auth Required</span><span class="v" id="authRequired">-</span>
+      <span class="k">Membership</span><span class="v" id="membership">-</span>
+      <span class="k">NIP-42</span><span class="v">Yes</span>
+      <span class="k">Pubkey</span><span class="v" id="pubkey">-</span>
+    </div>
+  </div>
 </div>
-
 <script>
 (function() {
-  var current = 'web';
-  var frameWeb = document.getElementById('frameWeb');
-  var frameApi = document.getElementById('frameApi');
-  var btnWeb = document.getElementById('btnWeb');
-  var btnApi = document.getElementById('btnApi');
-  var loaded = {web: false, api: false};
+  var dot = document.getElementById('dot');
+  var statusText = document.getElementById('statusText');
+  var version = document.getElementById('version');
+  var relayInfo = document.getElementById('relayInfo');
+  var pubkey = document.getElementById('pubkey');
+  var authRequired = document.getElementById('authRequired');
+  var membership = document.getElementById('membership');
 
-  // The relay's web UI is served as a SPA fallback by the relay itself.
-  // We load /c/ (a path that triggers the SPA fallback) which serves index.html.
-  // The relay's API/NIP-11 info is at / (GET /).
-  function urlFor(kind) {
-    if (kind === 'web') return './c/';
-    if (kind === 'api') return './info';
+  function setOk() {
+    dot.className = 'dot ok';
+    statusText.textContent = 'connected';
+  }
+  function setErr(msg) {
+    dot.className = 'dot err';
+    statusText.textContent = msg || 'error';
   }
 
-  window.setMode = function(mode) {
-    if (mode === current) return;
-    current = mode;
-    frameWeb.className = mode === 'web' ? '' : 'hidden';
-    frameApi.className = mode === 'api' ? '' : 'hidden';
-    btnWeb.className = mode === 'web' ? 'btn active' : 'btn secondary';
-    btnApi.className = mode === 'api' ? 'btn active' : 'btn secondary';
-    if (!loaded[mode]) {
-      var frame = mode === 'web' ? frameWeb : frameApi;
-      frame.src = urlFor(mode);
-      loaded[mode] = true;
-    }
-  };
-
-  // Load web UI by default
-  frameWeb.src = urlFor('web');
-  loaded.web = true;
-
-  // Check relay health
-  function checkHealth() {
-    fetch('./health', {cache: 'no-store'})
-      .then(function(r) { 
-        var s = document.getElementById('statusRelay');
-        s.textContent = r.ok ? '✅ Relay' : '💤 Relay';
-      })
-      .catch(function() {
-        document.getElementById('statusRelay').textContent = '💤 Relay';
+  fetch('./info')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      setOk();
+      version.textContent = 'v' + d.version;
+      pubkey.textContent = d.self || '-';
+      authRequired.textContent = d.limitation.auth_required ? 'Yes' : 'No';
+      membership.textContent = d.limitation.restricted_writes ? 'Yes' : 'No';
+      var nips = (d.supported_nips || []).map(function(n) { return 'NIP-' + n; }).join(', ');
+      relayInfo.innerHTML = '';
+      var rows = [
+        ['Software', d.software],
+        ['Version', d.version],
+        ['Pubkey', d.self || '-'],
+        ['Supported NIPs', nips],
+        ['Auth Required', d.limitation.auth_required ? 'Yes' : 'No'],
+        ['Max Subscriptions', d.limitation.max_subscriptions],
+        ['Max Message Size', d.limitation.max_message_size + ' bytes']
+      ];
+      rows.forEach(function(r) {
+        var k = document.createElement('span'); k.className = 'k'; k.textContent = r[0];
+        var v = document.createElement('span'); v.className = 'v'; v.textContent = r[1];
+        relayInfo.appendChild(k); relayInfo.appendChild(v);
       });
-  }
-  checkHealth();
-  setInterval(checkHealth, 10000);
+    })
+    .catch(function(e) {
+      setErr('relay not reachable');
+      version.textContent = 'error';
+    });
+
+  // Health check every 10s
+  setInterval(function() {
+    fetch('./health', {cache: 'no-store'})
+      .then(function(r) { if (r.ok) setOk(); else setErr('unhealthy'); })
+      .catch(function() { setErr('disconnected'); });
+  }, 10000);
 })();
 </script>
 </body>
