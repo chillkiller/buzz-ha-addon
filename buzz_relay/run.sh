@@ -183,9 +183,26 @@ http {
             proxy_connect_timeout 5s;
         }
 
-        # All other paths → relay on :3001
+        # SPA paths — serve the Buzz web UI with asset path rewriting
+        # sub_filter needs proxy_buffering ON to work
+        location /repos {
+            proxy_pass http://127.0.0.1:3001;
+            proxy_http_version 1.1;
+            proxy_set_header Host localhost:3001;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            # Rewrite absolute /assets/ to relative ./assets/ for HA Ingress
+            sub_filter_once off;
+            sub_filter 'href="/assets/' 'href="./assets/';
+            sub_filter 'src="/assets/' 'src="./assets/';
+            sub_filter_types text/html;
+            proxy_set_header Accept-Encoding "";
+        }
+
+        # All other paths → relay on :3001 (API, WebSocket, static assets)
         # Host is rewritten to localhost:3001 so the relay's community always matches.
-        # WebSocket upgrade is preserved for /ws connections.
         location / {
             proxy_pass http://127.0.0.1:3001;
             proxy_http_version 1.1;
