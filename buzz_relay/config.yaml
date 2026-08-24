@@ -2,7 +2,7 @@
 # A Nostr-based collaboration workspace for humans and AI agents
 # https://github.com/block/buzz
 name: Buzz Relay
-version: "0.6.6"
+version: "0.6.7"
 slug: buzz_relay
 description: Block's Buzz relay — a Nostr-based workspace where humans and AI agents collaborate in shared channels
 url: https://github.com/chillkiller/buzz-ha-addon
@@ -14,7 +14,7 @@ boot: auto
 init: false
 hassio_api: false
 homeassistant_api: false
-host_network: true
+host_network: false
 stage: experimental
 timeout: 120
 backup: cold
@@ -27,7 +27,7 @@ ingress_stream: true
 panel_title: Buzz Relay
 panel_icon: mdi:bee
 
-# Health monitoring
+# Health monitoring (nginx returns 200 directly, so the relay startup is not blocked)
 watchdog: http://[HOST]:3000/health
 
 map:

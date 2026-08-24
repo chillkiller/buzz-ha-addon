@@ -169,10 +169,37 @@ http {
         listen 3000;
         server_name _;
 
-        # Root falls through to the catch-all `location /` below, which
-        # serves the SPA's index.html. The relay intentionally does NOT
-        # serve the SPA on `/` (only on /repos and /invite/*) — proxying
-        # `/` to the relay would return NIP-11 JSON instead of the UI.
+        # Root path: WebSocket upgrade goes to the relay; everything else
+        # gets the SPA landing page. The relay serves NIP-11 JSON or handles
+        # the Nostr WebSocket on "/".
+        location = / {
+            if ($http_upgrade = websocket) {
+                proxy_pass http://127.0.0.1:3001;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection $connection_upgrade;
+                proxy_set_header Host 127.0.0.1:3001;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_buffering off;
+                proxy_read_timeout 3600s;
+                proxy_send_timeout 3600s;
+            }
+            root /var/www;
+            try_files /landing.html =404;
+        }
+
+        # The relay only serves the SPA for /repos and /invite/* paths.
+        # Proxy those so the SPA gets its initial index.html from the relay.
+        location ~ ^/(repos|invite)/ {
+            proxy_pass http://127.0.0.1:3001;
+            proxy_set_header Host 127.0.0.1:3001;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_buffering off;
+        }
 
         # Health check — return 200 directly (nginx running = addon starting)
         location = /health {
@@ -184,12 +211,12 @@ http {
         # API and WebSocket routes → proxy to relay on :3001
         # These are the relay's explicit API routes that must NOT be
         # intercepted by the SPA fallback.
-        location ~ ^/(events|query|count|info|upload|media|hooks|workflows|operator|moderation|api|_liveness|_readiness|_status|_mesh|huddle|\.well-known|git|invite) {
+        location ~ ^/(events|query|count|info|upload|media|hooks|workflows|operator|moderation|api|_liveness|_readiness|_status|_mesh|huddle|\.well-known|git) {
             proxy_pass http://127.0.0.1:3001;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection $connection_upgrade;
-            proxy_set_header Host localhost:3001;
+            proxy_set_header Host 127.0.0.1:3001;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto $scheme;
@@ -201,14 +228,13 @@ http {
         # Static assets → proxy to relay (ServeDir handles these)
         location /assets/ {
             proxy_pass http://127.0.0.1:3001;
-            proxy_set_header Host localhost:3001;
+            proxy_set_header Host 127.0.0.1:3001;
             proxy_buffering off;
         }
 
-        # All other paths → serve SPA index.html
-        # The Buzz SPA uses TanStack Router for client-side routing.
-        # nginx serves index.html for all non-API routes so /login,
-        # /channels, /feed, /dms, /settings, /repos etc. all load the SPA.
+        # All remaining SPA routes → serve index.html directly from nginx.
+        # TanStack Router handles client-side navigation for /channels,
+        # /login, /feed, /dms, /settings etc.
         location / {
             root /srv/buzz/web;
             try_files $uri /index.html;
@@ -243,7 +269,7 @@ NGINXCONF
     export BUZZ_ALLOW_NIP_OA_AUTH="$ALLOW_NIP_OA_AUTH"
     export BUZZ_GIT_CONFORMANCE_PROBE="true"
     export BUZZ_CORS_ORIGINS=""
-    export RELAY_URL="http://localhost:3001"
+    export RELAY_URL="ws://127.0.0.1:3001"
     export BUZZ_SERVE_GIT_WEB_GUI="true"
 
     # Wait for Postgres
