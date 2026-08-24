@@ -176,11 +176,14 @@ http {
             add_header Cache-Control "no-cache";
         }
 
-        # Health check (proxied to relay)
+        # Health check — return 200 directly (nginx running = addon starting)
+        # The relay takes ~7s to start (git conformance probe); proxying
+        # to the relay during startup causes 502 which triggers HA watchdog
+        # restarts before the relay is ready.
         location = /health {
-            proxy_pass http://127.0.0.1:3001/health;
-            proxy_set_header Host localhost:3001;
-            proxy_connect_timeout 5s;
+            access_log off;
+            return 200 "OK\n";
+            add_header Content-Type text/plain;
         }
 
         # All other paths → relay on :3001 (API, WebSocket, SPA, static assets)
