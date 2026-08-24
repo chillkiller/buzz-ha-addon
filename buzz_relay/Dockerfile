@@ -1,28 +1,21 @@
 # ─────────────────────────────────────────────────────────────────────
-# Buzz Relay HA Add-on — Dockerfile (single-stage build to avoid cache issues)
-# Build everything from source (official ghcr.io image is private)
+# Buzz Relay HA Add-on — Dockerfile
+# Builds from source following the official Buzz Dockerfile pattern.
+# Official ghcr.io/block/buzz image is private (401).
 # ─────────────────────────────────────────────────────────────────────
 
-FROM rust:1.95-bookworm AS builder
-WORKDIR /build
+ARG RUST_VERSION=1.95
+ARG NODE_VERSION=24
+ARG DEBIAN_VERSION=bookworm
 
-# Install build deps for both Rust AND Node
+# ── Stage 1: Build all Rust binaries ────────────────────────────────
+FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS rust-builder
+WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config libssl-dev ca-certificates git \
-    curl \
     && rm -rf /var/lib/apt/lists/*
-
-# Install Node 24 for the web build
-RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
-    apt-get install -y nodejs && \
-    rm -rf /var/lib/apt/lists/*
-RUN corepack enable
-
-# Clone the repo
 RUN git clone --depth 1 https://github.com/block/buzz.git /build/buzz
 WORKDIR /build/buzz
-
-# Build Rust binaries
 RUN cargo build --release --locked \
     -p buzz-relay --bin buzz-relay \
     -p buzz-cli --bin buzz \
@@ -30,25 +23,36 @@ RUN cargo build --release --locked \
     -p buzz-admin --bin buzz-admin \
     -p buzz-pair-relay --bin buzz-pair-relay
 
-# Build web UI (in the same stage — no cache issues)
-# Install ALL workspace deps (not just --filter) so root devDeps,
-# overrides, and patches resolve correctly
-RUN pnpm install 2>&1
-RUN pnpm -C web build 2>&1 && pnpm -C admin-web build 2>&1
+# ── Stage 2: Build web UI (follows official Buzz Dockerfile exactly) ─
+FROM node:${NODE_VERSION}-${DEBIAN_VERSION}-slim AS web-builder
+WORKDIR /build
+RUN corepack enable
+# Copy only the files needed for pnpm install (same as official Dockerfile)
+COPY --from=rust-builder /build/buzz/package.json /build/buzz/pnpm-lock.yaml /build/buzz/pnpm-workspace.yaml ./
+COPY --from=rust-builder /build/buzz/patches/ patches/
+COPY --from=rust-builder /build/buzz/web/package.json web/
+COPY --from=rust-builder /build/buzz/admin-web/package.json admin-web/
+# Install with --frozen-lockfile --filter to skip the desktop package
+RUN pnpm install --frozen-lockfile --filter buzz-web --filter buzz-admin-web
+# Copy web source and build
+COPY --from=rust-builder /build/buzz/web/ web/
+COPY --from=rust-builder /build/buzz/admin-web/ admin-web/
+RUN pnpm -C web build && pnpm -C admin-web build
+# HARD VERIFY
+RUN test -f /build/web/dist/index.html || (echo "FATAL: web/dist/index.html missing" && exit 1)
+RUN test -f /build/admin-web/dist/index.html || (echo "FATAL: admin-web/dist/index.html missing" && exit 1)
 
-# HARD VERIFY — fail the build if web UI wasn't produced
-RUN test -f /build/buzz/web/dist/index.html || \
-    (echo "FATAL: web/dist/index.html missing" && exit 1)
-RUN test -f /build/buzz/admin-web/dist/index.html || \
-    (echo "FATAL: admin-web/dist/index.html missing" && exit 1)
-
-# ── Runtime stage ────────────────────────────────────────────────────
-FROM debian:bookworm-slim
+# ── Stage 3: Runtime ────────────────────────────────────────────────
+FROM debian:${DEBIAN_VERSION}-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV PATH="/usr/lib/postgresql/15/bin:${PATH}"
+
+# HA OCI labels (required when not using HA GitHub builder actions)
+LABEL io.hass.type="app" \
+      io.hass.arch="aarch64 amd64"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git openssl \
@@ -56,15 +60,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Rust binaries
-COPY --from=builder /build/buzz/target/release/buzz-relay      /usr/local/bin/buzz-relay
-COPY --from=builder /build/buzz/target/release/buzz            /usr/local/bin/buzz
-COPY --from=builder /build/buzz/target/release/buzz-acp        /usr/local/bin/buzz-acp
-COPY --from=builder /build/buzz/target/release/buzz-admin      /usr/local/bin/buzz-admin
-COPY --from=builder /build/buzz/target/release/buzz-pair-relay /usr/local/bin/buzz-pair-relay
+COPY --from=rust-builder /build/buzz/target/release/buzz-relay      /usr/local/bin/buzz-relay
+COPY --from=rust-builder /build/buzz/target/release/buzz            /usr/local/bin/buzz
+COPY --from=rust-builder /build/buzz/target/release/buzz-acp        /usr/local/bin/buzz-acp
+COPY --from=rust-builder /build/buzz/target/release/buzz-admin      /usr/local/bin/buzz-admin
+COPY --from=rust-builder /build/buzz/target/release/buzz-pair-relay /usr/local/bin/buzz-pair-relay
 
-# Copy web UI (verified to exist above)
-COPY --from=builder /build/buzz/web/dist        /srv/buzz/web
-COPY --from=builder /build/buzz/admin-web/dist  /srv/buzz/admin-web
+# Copy web UI (verified to exist in Stage 2)
+COPY --from=web-builder /build/web/dist        /srv/buzz/web
+COPY --from=web-builder /build/admin-web/dist  /srv/buzz/admin-web
 
 ENV BUZZ_WEB_DIR=/srv/buzz/web
 ENV BUZZ_ADMIN_WEB_DIR=/srv/buzz/admin-web

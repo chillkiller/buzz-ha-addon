@@ -8,6 +8,16 @@
 # ─────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
+# Clean up background services on exit
+cleanup() {
+    echo "[buzz] Shutting down..."
+    redis-cli -a "${REDIS_PASSWORD:-}" shutdown nosave 2>/dev/null || true
+    pkill minio 2>/dev/null || true
+    su postgres -c "pg_ctl -D '${PGDATA:-/data/postgres}' stop -m fast" 2>/dev/null || true
+    nginx -s stop 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
 # ── Read HA add-on options ───────────────────────────────────────────
 OPTIONS_FILE="/data/options.json"
 if [ ! -f "$OPTIONS_FILE" ]; then
@@ -224,7 +234,7 @@ NGINXCONF
 
     # Wait for Postgres
     echo "[buzz] Waiting for Postgres..."
-    for i in $(seq 1 30); do
+    for i in $(seq 1 60); do
         psql -h 127.0.0.1 -U buzz -d buzz -c "SELECT 1;" 2>/dev/null && break
         sleep 1
     done

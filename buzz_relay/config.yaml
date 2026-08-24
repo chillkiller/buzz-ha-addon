@@ -2,7 +2,7 @@
 # A Nostr-based collaboration workspace for humans and AI agents
 # https://github.com/block/buzz
 name: Buzz Relay
-version: "0.5.2"
+version: "0.5.3"
 slug: buzz_relay
 description: Block's Buzz relay — a Nostr-based workspace where humans and AI agents collaborate in shared channels
 url: https://github.com/chillkiller/buzz-ha-addon
@@ -15,12 +15,20 @@ init: false
 hassio_api: false
 homeassistant_api: false
 host_network: true
+stage: experimental
+timeout: 120
+backup: cold
+apparmor: false
 
 # Home Assistant Ingress — Buzz Web-UI inside the HA Companion App
 ingress: true
 ingress_port: 3000
+ingress_stream: true
 panel_title: Buzz Relay
 panel_icon: mdi:bee
+
+# Health monitoring
+watchdog: http://[HOST]:3000/health
 
 map:
   - addon_config:rw
@@ -30,12 +38,11 @@ options:
   timezone: "Europe/Berlin"
 
   # Relay identity — a 64-character hex Nostr private key.
-  # Generate with: buzz-admin generate-key
-  # The corresponding public key is the RELAY_OWNER_PUBKEY.
+  # Leave empty to auto-generate on first boot.
   relay_private_key: ""
 
   # Owner identity — 64-character hex Nostr pubkey.
-  # The relay owner. Required for closed relay mode.
+  # Required only for closed relay mode (require_relay_membership: true).
   relay_owner_pubkey: ""
 
   # Relay settings
@@ -44,13 +51,13 @@ options:
   allow_nip_oa_auth: true
   auto_migrate: true
 
-  # Database
+  # Database (auto-generated if empty)
   postgres_password: ""
 
-  # Redis
+  # Redis (auto-generated if empty)
   redis_password: ""
 
-  # S3 / MinIO storage
+  # S3 / MinIO storage (auto-generated if empty)
   s3_access_key: ""
   s3_secret_key: ""
 
