@@ -54,7 +54,7 @@ ENV PATH="/usr/lib/postgresql/15/bin:${PATH}"
 
 # HA OCI labels (required when not using HA GitHub builder actions)
 LABEL io.hass.type="app" \
-      io.hass.version="0.6.7" \
+      io.hass.version="0.6.8" \
       io.hass.arch="aarch64 amd64"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

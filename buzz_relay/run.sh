@@ -172,20 +172,31 @@ http {
         # Root path: WebSocket upgrade goes to the relay; everything else
         # gets the SPA landing page. The relay serves NIP-11 JSON or handles
         # the Nostr WebSocket on "/".
+        # We use a variable-based proxy so proxy_http_version can live at the
+        # location level (nginx forbids it inside `if`).
+        set $ws_backend "";
+        if ($http_upgrade = websocket) {
+            set $ws_backend "relay";
+        }
         location = / {
-            if ($http_upgrade = websocket) {
-                proxy_pass http://127.0.0.1:3001;
-                proxy_http_version 1.1;
-                proxy_set_header Upgrade $http_upgrade;
-                proxy_set_header Connection $connection_upgrade;
-                proxy_set_header Host 127.0.0.1:3001;
-                proxy_set_header X-Real-IP $remote_addr;
-                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                proxy_set_header X-Forwarded-Proto $scheme;
-                proxy_buffering off;
-                proxy_read_timeout 3600s;
-                proxy_send_timeout 3600s;
+            proxy_pass http://127.0.0.1:3001;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Host 127.0.0.1:3001;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_buffering off;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+            # For non-WS requests, serve the landing page directly.
+            error_page 418 = @landing;
+            if ($ws_backend = "") {
+                return 418;
             }
+        }
+        location @landing {
             root /var/www;
             try_files /landing.html =404;
         }
