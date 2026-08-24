@@ -177,20 +177,16 @@ http {
         }
 
         # Health check — return 200 directly (nginx running = addon starting)
-        # The relay takes ~7s to start (git conformance probe); proxying
-        # to the relay during startup causes 502 which triggers HA watchdog
-        # restarts before the relay is ready.
         location = /health {
             access_log off;
             return 200 "OK\n";
             add_header Content-Type text/plain;
         }
 
-        # All other paths → relay on :3001 (API, WebSocket, SPA, static assets)
-        # Host is rewritten to localhost:3001 so the relay's community always matches.
-        # Assets are built with --base './' so they use relative paths that
-        # work behind the HA Ingress prefix without rewriting.
-        location / {
+        # API and WebSocket routes → proxy to relay on :3001
+        # These are the relay's explicit API routes that must NOT be
+        # intercepted by the SPA fallback.
+        location ~ ^/(events|query|count|info|upload|media|hooks|workflows|operator|moderation|api|_liveness|_readiness|_status|_mesh|huddle|\.well-known|git|invite) {
             proxy_pass http://127.0.0.1:3001;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
@@ -198,11 +194,38 @@ http {
             proxy_set_header Host localhost:3001;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Host $host;
             proxy_set_header X-Forwarded-Proto $scheme;
             proxy_buffering off;
             proxy_read_timeout 3600s;
             proxy_send_timeout 3600s;
+        }
+
+        # Static assets → proxy to relay (ServeDir handles these)
+        location /assets/ {
+            proxy_pass http://127.0.0.1:3001;
+            proxy_set_header Host localhost:3001;
+            proxy_buffering off;
+        }
+
+        # WebSocket upgrade on / (Nostr protocol)
+        location = / {
+            proxy_pass http://127.0.0.1:3001;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host localhost:3001;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_buffering off;
+            proxy_read_timeout 3600s;
+        }
+
+        # All other paths → serve SPA index.html
+        # The Buzz SPA uses TanStack Router for client-side routing.
+        # nginx serves index.html for all non-API routes so /login,
+        # /channels, /feed, /dms, /settings, /repos etc. all load the SPA.
+        location / {
+            root /srv/buzz/web;
+            try_files $uri /index.html;
         }
     }
 }
