@@ -37,7 +37,8 @@ RUN pnpm install --frozen-lockfile --filter buzz-web --filter buzz-admin-web
 # Copy web source and build
 COPY --from=rust-builder /build/buzz/web/ web/
 COPY --from=rust-builder /build/buzz/admin-web/ admin-web/
-RUN pnpm -C web build && pnpm -C admin-web build
+# Build with relative base so assets work behind HA Ingress prefix
+RUN pnpm -C web build -- --base './' && pnpm -C admin-web build -- --base './'
 # HARD VERIFY
 RUN test -f /build/web/dist/index.html || (echo "FATAL: web/dist/index.html missing" && exit 1)
 RUN test -f /build/admin-web/dist/index.html || (echo "FATAL: admin-web/dist/index.html missing" && exit 1)
