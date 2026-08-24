@@ -231,6 +231,7 @@ NGINXCONF
     export BUZZ_GIT_CONFORMANCE_PROBE="true"
     export BUZZ_CORS_ORIGINS=""
     export RELAY_URL="http://localhost:3001"
+    export BUZZ_SERVE_GIT_WEB_GUI="true"
 
     # Wait for Postgres
     echo "[buzz] Waiting for Postgres..."
