@@ -169,21 +169,18 @@ http {
         listen 3000;
         server_name _;
 
-        # Root: WebSocket upgrade → relay, otherwise → landing.html
+        # Root → proxy to relay (WebSocket upgrade + NIP-11)
+        # The SPA doesn't GET / — it loads from /channels via the catch-all.
+        # WebSocket connections to / go here → relay.
         location = / {
-            if ($http_upgrade = websocket) {
-                proxy_pass http://127.0.0.1:3001;
-                proxy_http_version 1.1;
-                proxy_set_header Upgrade $http_upgrade;
-                proxy_set_header Connection "upgrade";
-                proxy_set_header Host localhost:3001;
-                proxy_set_header X-Real-IP $remote_addr;
-                proxy_buffering off;
-                proxy_read_timeout 3600s;
-            }
-            root /var/www;
-            try_files /landing.html =404;
-            add_header Cache-Control "no-cache";
+            proxy_pass http://127.0.0.1:3001;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Host localhost:3001;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_buffering off;
+            proxy_read_timeout 3600s;
         }
 
         # Health check — return 200 directly (nginx running = addon starting)
