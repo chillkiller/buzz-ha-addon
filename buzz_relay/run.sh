@@ -169,19 +169,10 @@ http {
         listen 3000;
         server_name _;
 
-        # Root → proxy to relay (WebSocket upgrade + NIP-11)
-        # The SPA doesn't GET / — it loads from /channels via the catch-all.
-        # WebSocket connections to / go here → relay.
-        location = / {
-            proxy_pass http://127.0.0.1:3001;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection $connection_upgrade;
-            proxy_set_header Host localhost:3001;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_buffering off;
-            proxy_read_timeout 3600s;
-        }
+        # Root falls through to the catch-all `location /` below, which
+        # serves the SPA's index.html. The relay intentionally does NOT
+        # serve the SPA on `/` (only on /repos and /invite/*) — proxying
+        # `/` to the relay would return NIP-11 JSON instead of the UI.
 
         # Health check — return 200 directly (nginx running = addon starting)
         location = /health {
