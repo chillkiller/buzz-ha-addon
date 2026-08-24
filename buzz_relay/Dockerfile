@@ -1,7 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────
 # Buzz Relay HA Add-on — Dockerfile
-# Multi-service container: Postgres + Redis + MinIO + buzz-relay + buzz-cli + buzz-acp
-# Built entirely from source (official ghcr.io image is private)
+# Build everything from source (official ghcr.io image is private)
 # ─────────────────────────────────────────────────────────────────────
 
 ARG RUST_VERSION=1.95
@@ -17,6 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN git clone --depth 1 https://github.com/block/buzz.git /build/buzz
 WORKDIR /build/buzz
+
+# Build all binaries in one cargo invocation
 RUN cargo build --release --locked \
     -p buzz-relay --bin buzz-relay \
     -p buzz-cli --bin buzz \
@@ -30,8 +31,14 @@ WORKDIR /build
 RUN corepack enable
 # Copy the entire repo so pnpm workspace resolution works
 COPY --from=rust-builder /build/buzz/ ./
-RUN pnpm install --frozen-lockfile --filter buzz-web --filter buzz-admin-web
-RUN pnpm -C web build && pnpm -C admin-web build
+# Install deps and build both web UIs
+RUN pnpm install --frozen-lockfile --filter buzz-web --filter buzz-admin-web 2>&1 || \
+    (echo "[web-builder] frozen-lockfile failed, trying without lockfile" && \
+     pnpm install --filter buzz-web --filter buzz-admin-web 2>&1)
+RUN pnpm -C web build 2>&1 && pnpm -C admin-web build 2>&1
+
+# Verify the build output exists
+RUN ls -la /build/web/dist/index.html /build/admin-web/dist/index.html
 
 # ── Stage 3: Runtime ─────────────────────────────────────────────────
 FROM debian:${DEBIAN_VERSION}-slim
@@ -53,21 +60,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nginx \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy all binaries from our build stage
+# Copy all binaries
 COPY --from=rust-builder /build/buzz/target/release/buzz-relay      /usr/local/bin/buzz-relay
 COPY --from=rust-builder /build/buzz/target/release/buzz            /usr/local/bin/buzz
 COPY --from=rust-builder /build/buzz/target/release/buzz-acp        /usr/local/bin/buzz-acp
 COPY --from=rust-builder /build/buzz/target/release/buzz-admin      /usr/local/bin/buzz-admin
 COPY --from=rust-builder /build/buzz/target/release/buzz-pair-relay /usr/local/bin/buzz-pair-relay
 
-# Copy the Buzz Web-UI and Admin Web-UI from our build stage
+# Copy the Buzz Web-UI and Admin Web-UI
 COPY --from=web-builder /build/web/dist        /srv/buzz/web
 COPY --from=web-builder /build/admin-web/dist  /srv/buzz/admin-web
 
 ENV BUZZ_WEB_DIR=/srv/buzz/web
 ENV BUZZ_ADMIN_WEB_DIR=/srv/buzz/admin-web
 
-# Download MinIO (architecture-aware via TARGETARCH)
+# Download MinIO (architecture-aware)
 ARG TARGETARCH
 RUN case "$TARGETARCH" in \
       arm64)  MINIO_ARCH=arm64  ;; \
@@ -81,11 +88,12 @@ RUN case "$TARGETARCH" in \
       "https://dl.min.io/client/mc/release/linux-${MINIO_ARCH}/mc" && \
     chmod +x /usr/local/bin/mc
 
-# Create data directories
-RUN mkdir -p /data/postgres /data/redis /data/minio /data/git /data/keys
+# Create data and web directories
+RUN mkdir -p /data/postgres /data/redis /data/minio /data/git /data/keys /var/www
 
-# Copy run script
+# Copy files
 COPY run.sh /run.sh
+COPY landing.html /var/www/landing.html
 RUN chmod +x /run.sh
 
 EXPOSE 3000

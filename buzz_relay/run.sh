@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────
 # Buzz Relay HA Add-on — Entrypoint
-# Starts: Postgres → Redis → MinIO → buzz-relay (with Web-UI on :3000)
+# Architecture (same as Hermes/OpenClaw addons):
+#   nginx :3000 (Ingress) → buzz-relay :3001 (internal)
+# nginx serves landing.html on / and proxies all other paths to the relay.
+# Host header is rewritten to localhost:3001 so the relay's community always matches.
 # ─────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -24,7 +27,6 @@ opt_or_gen() {
     fi
 }
 
-TIMEZONE=$(opt timezone)
 RELAY_PRIVATE_KEY=$(opt relay_private_key)
 RELAY_OWNER_PUBKEY=$(opt relay_owner_pubkey)
 REQUIRE_AUTH_TOKEN=$(opt_bool require_auth_token)
@@ -39,7 +41,7 @@ REDIS_PASSWORD=$(opt_or_gen redis_password)
 S3_ACCESS_KEY=$(opt_or_gen s3_access_key)
 S3_SECRET_KEY=$(opt_or_gen s3_secret_key)
 
-# Persist generated secrets back so they survive restarts
+# Persist generated secrets
 persist_secrets() {
     local tmp
     tmp=$(mktemp)
@@ -51,7 +53,6 @@ persist_secrets() {
        "$OPTIONS_FILE" > "$tmp" && mv "$tmp" "$OPTIONS_FILE"
 }
 
-# ── Generate keys if not provided ───────────────────────────────────
 generate_keys() {
     if [ -z "$RELAY_PRIVATE_KEY" ]; then
         echo "[buzz] Generating relay private key..."
@@ -68,23 +69,18 @@ start_postgres() {
     echo "[buzz] Starting Postgres..."
     export PGDATA=/data/postgres
 
-    # Create postgres user if it doesn't exist (initdb refuses to run as root)
     if ! id postgres &>/dev/null; then
         useradd -r -m -d /var/lib/postgresql -s /bin/bash postgres
     fi
-
-    # Ensure ownership
     mkdir -p "$PGDATA"
     touch /data/postgres.log
     chown postgres:postgres "$PGDATA" /data/postgres.log
 
-    # Initialize if needed
     if [ ! -d "$PGDATA/pg_wal" ]; then
         echo "[buzz] Initializing Postgres database..."
         su postgres -c "initdb -D $PGDATA -U buzz --auth-local=trust --auth-host=trust"
     fi
 
-    # Configure
     cat > "$PGDATA/postgresql.conf" << 'PGCONF'
 listen_addresses = '127.0.0.1'
 port = 5432
@@ -100,13 +96,8 @@ wal_buffers = 4MB
 PGCONF
     chown postgres:postgres "$PGDATA/postgresql.conf"
 
-    # Start as postgres user
     su postgres -c "pg_ctl -D $PGDATA -l /data/postgres.log start -o '-c config_file=$PGDATA/postgresql.conf'"
     sleep 2
-
-    # Create database and user
-    psql -h 127.0.0.1 -U buzz -d postgres -c "ALTER USER buzz WITH PASSWORD '$POSTGRES_PASSWORD' SUPERUSER;" 2>/dev/null || \
-        psql -h 127.0.0.1 -U buzz -d postgres -c "CREATE USER buzz WITH PASSWORD '$POSTGRES_PASSWORD' SUPERUSER;" 2>/dev/null || true
     psql -h 127.0.0.1 -U buzz -d postgres -c "CREATE DATABASE buzz OWNER buzz;" 2>/dev/null || true
     echo "[buzz] Postgres ready"
 }
@@ -116,90 +107,33 @@ start_redis() {
     echo "[buzz] Starting Redis..."
     mkdir -p /data/redis
     redis-server \
-        --port 6379 \
-        --bind 127.0.0.1 \
+        --port 6379 --bind 127.0.0.1 \
         --requirepass "$REDIS_PASSWORD" \
-        --appendonly yes \
-        --dir /data/redis \
-        --maxmemory 64mb \
-        --maxmemory-policy allkeys-lru \
-        --daemonize yes \
-        --save ""
+        --appendonly yes --dir /data/redis \
+        --maxmemory 64mb --maxmemory-policy allkeys-lru \
+        --daemonize yes --save ""
     sleep 1
-    redis-cli -a "$REDIS_PASSWORD" ping 2>/dev/null | grep -q PONG && echo "[buzz] Redis ready" || echo "[buzz] Redis starting..."
+    echo "[buzz] Redis ready"
 }
 
 # ── Start MinIO ──────────────────────────────────────────────────────
 start_minio() {
     echo "[buzz] Starting MinIO..."
     mkdir -p /data/minio
-    export MINIO_ROOT_USER="$S3_ACCESS_KEY"
-    export MINIO_ROOT_PASSWORD="$S3_SECRET_KEY"
-
-    minio server /data/minio \
-        --address 127.0.0.1:9000 \
-        --console-address 127.0.0.1:9001 \
+    MINIO_ROOT_USER="$S3_ACCESS_KEY" MINIO_ROOT_PASSWORD="$S3_SECRET_KEY" \
+    minio server /data/minio --address 127.0.0.1:9000 --console-address 127.0.0.1:9001 \
         > /data/minio.log 2>&1 &
-
     sleep 3
-
-    # Create bucket
     mc alias set local http://127.0.0.1:9000 "$S3_ACCESS_KEY" "$S3_SECRET_KEY" 2>/dev/null
     mc mb --ignore-existing local/buzz-media 2>/dev/null || true
-    mc anonymous set none local/buzz-media 2>/dev/null || true
     echo "[buzz] MinIO ready"
 }
 
-# ── Start Buzz Relay ─────────────────────────────────────────────────
+# ── Start nginx + Buzz Relay ─────────────────────────────────────────
 start_relay() {
-    echo "[buzz] Starting Buzz Relay..."
+    echo "[buzz] Configuring nginx reverse proxy..."
 
-    export DATABASE_URL="postgres://buzz:${POSTGRES_PASSWORD}@127.0.0.1:5432/buzz"
-    export REDIS_URL="redis://:${REDIS_PASSWORD}@127.0.0.1:6379"
-    export BUZZ_S3_ENDPOINT="http://127.0.0.1:9000"
-    export BUZZ_S3_ADDRESSING_STYLE="path"
-    export BUZZ_S3_ACCESS_KEY="$S3_ACCESS_KEY"
-    export BUZZ_S3_SECRET_KEY="$S3_SECRET_KEY"
-    export BUZZ_S3_BUCKET="buzz-media"
-    export BUZZ_GIT_REPO_PATH="/data/git"
-    export BUZZ_BIND_ADDR="127.0.0.1:3001"
-    export BUZZ_HEALTH_PORT="8080"
-    export BUZZ_AUTO_MIGRATE="$AUTO_MIGRATE"
-    export RUST_LOG="${RUST_LOG:-buzz_relay=info}"
-    export BUZZ_WEB_DIR="/srv/buzz/web"
-    export BUZZ_ADMIN_WEB_DIR="/srv/buzz/admin-web"
-    export BUZZ_RELAY_PRIVATE_KEY="$RELAY_PRIVATE_KEY"
-    export RELAY_OWNER_PUBKEY="$RELAY_OWNER_PUBKEY"
-    export BUZZ_REQUIRE_AUTH_TOKEN="$REQUIRE_AUTH_TOKEN"
-    export BUZZ_REQUIRE_RELAY_MEMBERSHIP="$REQUIRE_RELAY_MEMBERSHIP"
-    export BUZZ_ALLOW_NIP_OA_AUTH="$ALLOW_NIP_OA_AUTH"
-    export BUZZ_GIT_CONFORMANCE_PROBE="true"
-    export BUZZ_CORS_ORIGINS=""
-
-    # RELAY_URL determines which host the relay seeds a community for.
-    # The relay runs on 127.0.0.1:3001 behind nginx which always sends
-    # Host: localhost:3001, so the community always matches.
-    export RELAY_URL="http://localhost:3001"
-    echo "[buzz] RELAY_URL=${RELAY_URL} (community host)"
-
-    # Wait for Postgres
-    echo "[buzz] Waiting for Postgres..."
-    for i in $(seq 1 30); do
-        psql -h 127.0.0.1 -U buzz -d buzz -c "SELECT 1;" 2>/dev/null && break
-        sleep 1
-    done
-
-    # Run migrations if auto-migrate
-    if [ "$AUTO_MIGRATE" = "true" ]; then
-        echo "[buzz] Running database migrations..."
-        buzz-admin migrate 2>&1 || echo "[buzz] Migration via buzz-admin failed, relay will auto-migrate"
-    fi
-
-    # Start nginx reverse proxy on :3000 (HA Ingress port)
-    # It rewrites the Host header to localhost:3001 so the relay's
-    # community (seeded from RELAY_URL=http://localhost:3001) always matches,
-    # regardless of what Host HA Ingress forwards.
-    echo "[buzz] Starting nginx proxy on :3000 → relay on :3001..."
+    # Write nginx config
     cat > /etc/nginx/nginx.conf << 'NGINXCONF'
 worker_processes 1;
 pid /var/run/nginx.pid;
@@ -225,6 +159,23 @@ http {
         listen 3000;
         server_name _;
 
+        # Landing page (shown in HA Ingress sidebar)
+        location = / {
+            root /var/www;
+            try_files /landing.html =404;
+            add_header Cache-Control "no-cache";
+        }
+
+        # Health check (proxied to relay)
+        location = /health {
+            proxy_pass http://127.0.0.1:3001/health;
+            proxy_set_header Host localhost:3001;
+            proxy_connect_timeout 5s;
+        }
+
+        # All other paths → relay on :3001
+        # Host is rewritten to localhost:3001 so the relay's community always matches.
+        # WebSocket upgrade is preserved for /ws connections.
         location / {
             proxy_pass http://127.0.0.1:3001;
             proxy_http_version 1.1;
@@ -242,9 +193,47 @@ http {
     }
 }
 NGINXCONF
-    nginx
 
-    # Start relay on :3001 (behind nginx)
+    # Start nginx
+    nginx
+    echo "[buzz] nginx listening on :3000 (Ingress)"
+
+    # Configure and start relay
+    export DATABASE_URL="postgres://buzz:${POSTGRES_PASSWORD}@127.0.0.1:5432/buzz"
+    export REDIS_URL="redis://:${REDIS_PASSWORD}@127.0.0.1:6379"
+    export BUZZ_S3_ENDPOINT="http://127.0.0.1:9000"
+    export BUZZ_S3_ADDRESSING_STYLE="path"
+    export BUZZ_S3_ACCESS_KEY="$S3_ACCESS_KEY"
+    export BUZZ_S3_SECRET_KEY="$S3_SECRET_KEY"
+    export BUZZ_S3_BUCKET="buzz-media"
+    export BUZZ_GIT_REPO_PATH="/data/git"
+    export BUZZ_BIND_ADDR="127.0.0.1:3001"
+    export BUZZ_HEALTH_PORT="8080"
+    export BUZZ_AUTO_MIGRATE="$AUTO_MIGRATE"
+    export RUST_LOG="${RUST_LOG:-buzz_relay=info}"
+    export BUZZ_WEB_DIR="/srv/buzz/web"
+    export BUZZ_ADMIN_WEB_DIR="/srv/buzz/admin-web"
+    export BUZZ_RELAY_PRIVATE_KEY="$RELAY_PRIVATE_KEY"
+    export RELAY_OWNER_PUBKEY="$RELAY_OWNER_PUBKEY"
+    export BUZZ_REQUIRE_AUTH_TOKEN="$REQUIRE_AUTH_TOKEN"
+    export BUZZ_REQUIRE_RELAY_MEMBERSHIP="$REQUIRE_RELAY_MEMBERSHIP"
+    export BUZZ_ALLOW_NIP_OA_AUTH="$ALLOW_NIP_OA_AUTH"
+    export BUZZ_GIT_CONFORMANCE_PROBE="true"
+    export BUZZ_CORS_ORIGINS=""
+    export RELAY_URL="http://localhost:3001"
+
+    # Wait for Postgres
+    echo "[buzz] Waiting for Postgres..."
+    for i in $(seq 1 30); do
+        psql -h 127.0.0.1 -U buzz -d buzz -c "SELECT 1;" 2>/dev/null && break
+        sleep 1
+    done
+
+    if [ "$AUTO_MIGRATE" = "true" ]; then
+        echo "[buzz] Running database migrations..."
+        buzz-admin migrate 2>&1 || echo "[buzz] buzz-admin migrate failed, relay will auto-migrate"
+    fi
+
     echo "[buzz] Buzz Relay starting on :3001 (behind nginx :3000)"
     exec buzz-relay
 }

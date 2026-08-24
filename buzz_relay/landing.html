@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Buzz Relay</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#111111;color:#e6edf3;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  body{display:flex;flex-direction:column}
+  .titlebar{display:flex;align-items:center;gap:8px;padding:4px 8px;background:#1c1c1c;border-bottom:1px solid #1f2937;min-height:32px;flex-shrink:0}
+  .titlebar .version{color:#fbbf24;font-size:12px;white-space:nowrap}
+  .titlebar .buttons{display:flex;gap:6px;margin:0 auto;align-items:center}
+  .titlebar .status{display:flex;gap:6px;font-size:11px;color:#9ca3af}
+  .btn{background:#f59e0b;color:#111;border:0;border-radius:6px;padding:4px 10px;cursor:pointer;text-decoration:none;display:inline-block;font-size:12px;font-weight:600}
+  .btn.secondary{background:#334155;color:#e6edf3}
+  .btn:hover{filter:brightness(1.15)}
+  .btn.active{background:#d97706}
+  .term{flex:1;overflow:hidden;position:relative}
+  .term iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0;background:#111}
+  .term iframe.hidden{display:none}
+</style>
+</head>
+<body>
+
+<div class="titlebar">
+  <span class="version">🐝 Buzz Relay</span>
+  <div class="buttons">
+    <button class="btn active" id="btnWeb" onclick="setMode('web')">Buzz</button>
+    <button class="btn secondary" id="btnApi" onclick="setMode('api')">API Info</button>
+  </div>
+  <div class="status">
+    <span id="statusRelay">⏳ Relay</span>
+  </div>
+</div>
+
+<div class="term">
+  <iframe id="frameWeb" src="" title="Buzz Web UI"></iframe>
+  <iframe id="frameApi" src="" title="Relay API Info" class="hidden"></iframe>
+</div>
+
+<script>
+(function() {
+  var current = 'web';
+  var frameWeb = document.getElementById('frameWeb');
+  var frameApi = document.getElementById('frameApi');
+  var btnWeb = document.getElementById('btnWeb');
+  var btnApi = document.getElementById('btnApi');
+  var loaded = {web: false, api: false};
+
+  // The relay's web UI is served as a SPA fallback by the relay itself.
+  // We load /c/ (a path that triggers the SPA fallback) which serves index.html.
+  // The relay's API/NIP-11 info is at / (GET /).
+  function urlFor(kind) {
+    if (kind === 'web') return './c/';
+    if (kind === 'api') return './info';
+  }
+
+  window.setMode = function(mode) {
+    if (mode === current) return;
+    current = mode;
+    frameWeb.className = mode === 'web' ? '' : 'hidden';
+    frameApi.className = mode === 'api' ? '' : 'hidden';
+    btnWeb.className = mode === 'web' ? 'btn active' : 'btn secondary';
+    btnApi.className = mode === 'api' ? 'btn active' : 'btn secondary';
+    if (!loaded[mode]) {
+      var frame = mode === 'web' ? frameWeb : frameApi;
+      frame.src = urlFor(mode);
+      loaded[mode] = true;
+    }
+  };
+
+  // Load web UI by default
+  frameWeb.src = urlFor('web');
+  loaded.web = true;
+
+  // Check relay health
+  function checkHealth() {
+    fetch('./health', {cache: 'no-store'})
+      .then(function(r) { 
+        var s = document.getElementById('statusRelay');
+        s.textContent = r.ok ? '✅ Relay' : '💤 Relay';
+      })
+      .catch(function() {
+        document.getElementById('statusRelay').textContent = '💤 Relay';
+      });
+  }
+  checkHealth();
+  setInterval(checkHealth, 10000);
+})();
+</script>
+</body>
+</html>
