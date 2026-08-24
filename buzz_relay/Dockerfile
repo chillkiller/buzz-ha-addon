@@ -37,8 +37,9 @@ RUN pnpm install --frozen-lockfile --filter buzz-web --filter buzz-admin-web
 # Copy web source and build
 COPY --from=rust-builder /build/buzz/web/ web/
 COPY --from=rust-builder /build/buzz/admin-web/ admin-web/
-# Build with relative base so assets work behind HA Ingress prefix
-RUN pnpm -C web build -- --base './' && pnpm -C admin-web build -- --base './'
+# Patch vite.config.ts to use relative base for HA Ingress compatibility
+RUN sed -i "s|defineConfig({|defineConfig({ base: './',|" web/vite.config.ts admin-web/vite.config.ts
+RUN pnpm -C web build && pnpm -C admin-web build
 # HARD VERIFY
 RUN test -f /build/web/dist/index.html || (echo "FATAL: web/dist/index.html missing" && exit 1)
 RUN test -f /build/admin-web/dist/index.html || (echo "FATAL: admin-web/dist/index.html missing" && exit 1)

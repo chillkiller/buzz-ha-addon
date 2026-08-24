@@ -2,7 +2,7 @@
 # A Nostr-based collaboration workspace for humans and AI agents
 # https://github.com/block/buzz
 name: Buzz Relay
-version: "0.6.1"
+version: "0.6.2"
 slug: buzz_relay
 description: Block's Buzz relay — a Nostr-based workspace where humans and AI agents collaborate in shared channels
 url: https://github.com/chillkiller/buzz-ha-addon
