@@ -4,6 +4,7 @@
 # ─────────────────────────────────────────────────────────────────────
 
 ARG RUST_VERSION=1.95
+ARG NODE_VERSION=24
 ARG DEBIAN_VERSION=bookworm
 
 # ── Stage 1: Build all Rust binaries from source ─────────────────────
@@ -23,7 +24,29 @@ RUN cargo build --release --locked \
     -p buzz-admin --bin buzz-admin \
     -p buzz-pair-relay --bin buzz-pair-relay
 
-# ── Stage 2: Runtime ─────────────────────────────────────────────────
+# ── Stage 2: Build web UI from source ────────────────────────────────
+FROM node:${NODE_VERSION}-${DEBIAN_VERSION}-slim AS web-builder
+WORKDIR /build
+
+# Enable corepack for pnpm
+RUN corepack enable
+
+# Copy the entire repo (pnpm needs full workspace + patches + lockfile)
+COPY --from=rust-builder /build/buzz/ ./
+
+# Install dependencies WITHOUT --frozen-lockfile (shallow clone may mismatch)
+RUN pnpm install --filter buzz-web --filter buzz-admin-web 2>&1
+
+# Build both web UIs
+RUN pnpm -C web build 2>&1 && pnpm -C admin-web build 2>&1
+
+# VERIFY: build output must contain index.html, or fail the Docker build
+RUN test -f /build/web/dist/index.html && echo "web/dist/index.html OK" || \
+    (echo "ERROR: web/dist/index.html missing — build failed" && exit 1)
+RUN test -f /build/admin-web/dist/index.html && echo "admin-web/dist/index.html OK" || \
+    (echo "ERROR: admin-web/dist/index.html missing — build failed" && exit 1)
+
+# ── Stage 3: Runtime ─────────────────────────────────────────────────
 FROM debian:${DEBIAN_VERSION}-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -49,6 +72,13 @@ COPY --from=rust-builder /build/buzz/target/release/buzz            /usr/local/b
 COPY --from=rust-builder /build/buzz/target/release/buzz-acp        /usr/local/bin/buzz-acp
 COPY --from=rust-builder /build/buzz/target/release/buzz-admin      /usr/local/bin/buzz-admin
 COPY --from=rust-builder /build/buzz/target/release/buzz-pair-relay /usr/local/bin/buzz-pair-relay
+
+# Copy the Buzz Web-UI and Admin Web-UI (verified to exist in Stage 2)
+COPY --from=web-builder /build/web/dist        /srv/buzz/web
+COPY --from=web-builder /build/admin-web/dist  /srv/buzz/admin-web
+
+ENV BUZZ_WEB_DIR=/srv/buzz/web
+ENV BUZZ_ADMIN_WEB_DIR=/srv/buzz/admin-web
 
 # Download MinIO (architecture-aware)
 ARG TARGETARCH
