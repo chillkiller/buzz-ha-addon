@@ -31,7 +31,9 @@ RUN cargo build --release --locked \
     -p buzz-pair-relay --bin buzz-pair-relay
 
 # Build web UI (in the same stage — no cache issues)
-RUN pnpm install --filter buzz-web --filter buzz-admin-web 2>&1
+# Install ALL workspace deps (not just --filter) so root devDeps,
+# overrides, and patches resolve correctly
+RUN pnpm install 2>&1
 RUN pnpm -C web build 2>&1 && pnpm -C admin-web build 2>&1
 
 # HARD VERIFY — fail the build if web UI wasn't produced
