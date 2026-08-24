@@ -169,8 +169,18 @@ http {
         listen 3000;
         server_name _;
 
-        # Landing page (shown in HA Ingress sidebar)
+        # Root: WebSocket upgrade → relay, otherwise → landing.html
         location = / {
+            if ($http_upgrade = websocket) {
+                proxy_pass http://127.0.0.1:3001;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection "upgrade";
+                proxy_set_header Host localhost:3001;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_buffering off;
+                proxy_read_timeout 3600s;
+            }
             root /var/www;
             try_files /landing.html =404;
             add_header Cache-Control "no-cache";
@@ -205,18 +215,6 @@ http {
             proxy_pass http://127.0.0.1:3001;
             proxy_set_header Host localhost:3001;
             proxy_buffering off;
-        }
-
-        # WebSocket upgrade on / (Nostr protocol)
-        location = / {
-            proxy_pass http://127.0.0.1:3001;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection "upgrade";
-            proxy_set_header Host localhost:3001;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_buffering off;
-            proxy_read_timeout 3600s;
         }
 
         # All other paths → serve SPA index.html
