@@ -166,7 +166,7 @@ http {
     }
 
     server {
-        listen 3000;
+        listen 0.0.0.0:3000;
         server_name _;
 
         # Root path: WebSocket upgrade goes to the relay; everything else
